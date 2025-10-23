@@ -30,11 +30,17 @@ N_L_train = 8;                                                             % pil
 N_L_test = 8;                                                              % pilot repetition 수 (NL for testing)
 
 EbN0_train_dB = 20;                                                        % DNN 학습시 사용할 Eb/N0
-mod_order = 1;                                                             % 변조 차수 (4-QAM)
+mod_order = 2;                                                             % 변조 차수 (4-QAM) ---- <<변경>>
+% mod_order = 1 로 두면 bits_per_symbol = log2(1) = 0 -> EsN0 = EbN0 +
+% 10*log10(0) 이 정의되지 않아서 오류 발생
+
+% 현재 설정은 BPSK(2진, 1bit/symbol)로 변경한 값
+
 bits_per_symbol = log2(mod_order);                                         % 심볼 당 비트 수 (QPSK -> 2)
 EsN0_train_dB = EbN0_train_dB + 10*log10(bits_per_symbol);                 % Es/N0 변환 (symbol energy to noise)
 
-EbN0_dBs = 0:2:20;                                                         % 결과 플롯용 Eb/N0 sweep (dB)
+%EbN0_dBs = 0:2:20;                                                         % 결과 플롯용 Eb/N0 sweep (dB)
+EbN0_dBs = 20:2:40;
 EsN0_dBs = EbN0_dBs + 10*log10(bits_per_symbol);                           % Es/N0 대응값
 
 %% ------------------ Transmit correlation matrix Rt 구성 (UPA, Kronecker) ------------------
