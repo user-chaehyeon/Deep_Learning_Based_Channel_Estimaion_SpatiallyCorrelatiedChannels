@@ -118,9 +118,46 @@ results_dnn_map = containers.Map('KeyType','double','ValueType','any');    % DNN
 for rr = 1:numel(r_list)                                                   % r_list 각 원소에 대해 반복
     r = r_list(rr);                                                        % 현재 r 값
     Npilot = Npilot_dict(r);                                               % 해당 r에 대한 파일럿 수 (Table 값)
-    P_idx = 1:Npilot;                                                      % 파일럿을 보낸 안테나 인덱스
+    % P_idx = 1:Npilot;                                                      % 파일럿을 보낸 안테나 인덱스
     % UPA(8×8) 물리 배열을 1차로 펴서 한 족에 몰린 패턴 사용
-    N_idx = setdiff(1:NT, P_idx);                                          % 파일럿이 없는 null 인덱스
+
+    % --- 균등 간격 UPA 파일럿 인덱스 생성 (항상 numel(P) >= Npilot 보장) ---
+    NT_H = 8; NT_V = 8;   % UPA 크기
+    % 1) 우선 가로를 최대(=NT_H)로 두고 세로 개수를 결정
+    NH = NT_H;
+    NV = ceil(Npilot / NH);
+    % 세로가 배열 크기를 넘으면 가로를 늘려 보정
+    if NV > NT_V
+        NV = NT_V;
+        NH = ceil(Npilot / NV);
+        NH = min(NH, NT_H);
+    end
+
+    % 2) 가로/세로 축에서 균등 간격으로 포인트 뽑기
+    hs = round(linspace(1, NT_H, NH));
+    vs = round(linspace(1, NT_V, NV));
+    hs = unique(hs,'stable');  NH = numel(hs);  % 혹시 중복 제거
+    vs = unique(vs,'stable');  NV = numel(vs);
+
+    % 3) 2D 격자 조합 → 선형 인덱스
+    [HH, VV] = meshgrid(hs, vs);                 % HH, VV: (NV x NH)
+    P = reshape((VV-1)*NT_H + HH, 1, []);        % 후보 인덱스 (길이 = NH*NV)
+
+    % 4) 후보가 많으면 균등하게 솎아내 Npilot개만 선택
+    if numel(P) >= Npilot
+        pick = round(linspace(1, numel(P), Npilot));
+        P_idx = sort(P(pick));
+    else
+        % 이 경우는 거의 없지만, 대비해서 부족하면 인접한 인덱스로 보충
+        need = Npilot - numel(P);
+        pool = setdiff(1:NT_H*NT_V, P);
+        P_idx = sort([P, pool(round(linspace(1, numel(pool), need)))]);
+    end
+
+    N_idx = setdiff(1:NT_H*NT_V, P_idx);   % null 인덱스
+
+
+    % N_idx = setdiff(1:NT, P_idx);                                          % 파일럿이 없는 null 인덱스
     input_dim = 2 * NR * Npilot;                                           % DNN 입력 차원 (real+imag)
     output_dim = 2 * NR * (NT - Npilot);                                   % DNN 출력 차원 (real+imag)
 
