@@ -7,17 +7,30 @@ clearvars; close all; clc;                                                 % 작
 
 %% ------------------ System / Paper parameters ------------------
 NT = 64;                                                                   % 송신 안테나 수 NT (transmit antennas)
-NR = 2;                                                                    % 수신 안테나 수 NR (receive antennas)
-NT_H = 8; NT_V = 8;                                                        % UPA (Uniform Planar Array) 가로/세로 차원 (NT_H x NT_V = NT)
+% NT = 128;
+% NT = 256;
 
+NR = 2;                                                                    % 수신 안테나 수 NR (receive antennas)
+NT_H = 8;
+NT_V = 8;                                                                  % UPA (Uniform Planar Array) 가로/세로 차원 (NT_H x NT_V = NT)
+
+assert(NT_H*NT_V == NT, 'UPA size must match NT');
+% assert : 조건이 false 인 경우 오류 발생 - 오류 수식으로 문자열 출력
 
 rho = 0.9;                                                                 % 인접 안테나 간 상관계수 rho (correlation coefficient)
 r_list = [0.875, 0.938, 0.969];                                            % pilot ratio 리스트 r
-% r_list = [0.5,0.75,0.15];
-
-% r에 대응되는 파일럿 개
+% % r_list = [0.5,0.75,0.15];
+% 
+% 
+% % r에 대응되는 파일럿 개
 Npilot_dict = containers.Map([0.875,0.938,0.969],[56,60,62]);              % r -> Npilot 매핑
-% Npilot_dict = containers.Map([0.5,0.75,0.15],[32,48,16]);
+% % Npilot_dict = containers.Map([0.5,0.75,0.15],[32,48,16]);
+
+% r_list = [0.875, 0.938, 0.969];
+% Npilot_dict = containers.Map([0.875,0.938,0.969],[112,120,124]);
+
+% r_list = [0.875, 0.938, 0.969];
+% Npilot_dict = containers.Map([0.875,0.938,0.969],[224,240,248]);
 
 %% ------------------ DNN hyperpatameters ------------------
 hidden_units = [1024, 1024, 1024];                                         % 은닉층 노드 수 (DNN hidden units)
@@ -31,8 +44,8 @@ valFraction = 0.15;                                                        % 검
 N_test = 1000;                                                             % 테스트 샘플 수 (각 SNR에서 Monte-Carlo 샘플 수)
 
 %% ------------------ 파일럿 반복 및 SNR 설정 ------------------
-N_L_train = 8;                                                             % pilot repetition 수 (NL for training)
-N_L_test = 8;                                                              % pilot repetition 수 (NL for testing)
+N_L_train = round(sqrt(NT));                                                             % pilot repetition 수 (NL for training)
+N_L_test = round(sqrt(NT));                                                              % pilot repetition 수 (NL for testing)
 
 EbN0_train_dB = 20;                                                        % DNN 학습시 사용할 Eb/N0
 % mod_order = 2;                                                           % 변조 차수 (4-QAM) ---- <<변경>>
@@ -67,7 +80,7 @@ R_t = (R_t + R_t') / 2;                                                    % 수
 
 
 % Hermitian sqrt (안정적인 Hermit 제곱근 만들기 위한 전처리 - 수치안정)
-[U,D] = eig((R_t+R_t')/2);                                                 % 수치적으로 정확한 Hermitian화 (대칭화) 후 고유분해
+[U,D] = eig(R_t);                                                 % 수치적으로 정확한 Hermitian화 (대칭화) 후 고유분해
 D = max(real(diag(D)), 0);                                                 % 음수 제거(수치오차)
 R_t_sqrt = U*diag(sqrt(D))*U';                                             % 고유값의 실수부만 취하고, 음의 값은 0으로 클리핑 -> PSD로 투영
 
@@ -76,8 +89,9 @@ R_t_sqrt = U*diag(sqrt(D))*U';                                             % 고
 gen_channel = @(ns) apply_corr(gen_channel_peda(ns, NR, NT), R_t_sqrt);
 
 function Hc = apply_corr(H, Rts)
-    [ns, NR, NT] = size(H); Hc = zeros(ns, NR, NT);
-    for k=1:ns
+    [ns, NR, NT] = size(H);
+    Hc = zeros(ns, NR, NT);
+    for k = 1:ns
         Hw = squeeze(H(k,:,:));                                             % NR x NT
         Hc(k,:,:) = Hw * Rts;                                               % Rt^{1/2} (Hermitian) 곱
     end
@@ -122,7 +136,10 @@ for rr = 1:numel(r_list)                                                   % r_l
     % UPA(8×8) 물리 배열을 1차로 펴서 한 족에 몰린 패턴 사용
 
     % --- 균등 간격 UPA 파일럿 인덱스 생성 (항상 numel(P) >= Npilot 보장) ---
-    NT_H = 8; NT_V = 8;   % UPA 크기
+    % NT_H = 8; NT_V = 8;   % UPA 크기                                        % 안테나 개수 바꾸면 이것도 변경해야함
+
+
+
     % 1) 우선 가로를 최대(=NT_H)로 두고 세로 개수를 결정
     NH = NT_H;
     NV = ceil(Npilot / NH);
@@ -150,14 +167,23 @@ for rr = 1:numel(r_list)                                                   % r_l
     else
         % 이 경우는 거의 없지만, 대비해서 부족하면 인접한 인덱스로 보충
         need = Npilot - numel(P);
-        pool = setdiff(1:NT_H*NT_V, P);
+
+        % 후보가 많으면 솎아내는 부분은 그대로 두고,
+        % 보충 pool과 null 인덱스는 NT를 사용
+        pool  = setdiff(1:NT, P);
         P_idx = sort([P, pool(round(linspace(1, numel(pool), need)))]);
+
+        N_idx = setdiff(1:NT, P_idx);    % ★ 1:NT 사용 (이전 1:NT_H*NT_V 아님)
+        pool = setdiff(1:NT_H*NT_V, P);
     end
 
-    N_idx = setdiff(1:NT_H*NT_V, P_idx);   % null 인덱스
+    %     P_idx = sort([P, pool(round(linspace(1, numel(pool), need)))]);
+    % end
+    % 
+    % N_idx = setdiff(1:NT_H*NT_V, P_idx);   % null 인덱스
 
 
-    % N_idx = setdiff(1:NT, P_idx);                                          % 파일럿이 없는 null 인덱스
+    N_idx = setdiff(1:NT, P_idx);                                          % 파일럿이 없는 null 인덱스
     input_dim = 2 * NR * Npilot;                                           % DNN 입력 차원 (real+imag)
     output_dim = 2 * NR * (NT - Npilot);                                   % DNN 출력 차원 (real+imag)
 
@@ -181,11 +207,11 @@ for rr = 1:numel(r_list)                                                   % r_l
 
             y_full = zeros(1,NT);
             for l = 1:N_L_test
-                noise_l = (randn(1,NT) + 1i*randn(1,NT)) * sqrt(sigma2/2); % per-repeat noise: sigma2
+                noise_l = (randn(1,NT) + 1i*randn(1,NT)) * sqrt(sigma2_train/2); % per-repeat noise: sigma2
                 y_full = y_full + (H(rcv,:) + noise_l);
             end
             y_full = y_full / N_L_test;                                    % 평균
-            h_hat  = lmmse_full(y_full.', sigma2/N_L_test);                % 등가분산으로 LMMSE
+            h_hat  = lmmse_full(y_full.', sigma2_train/N_L_test);                % 등가분산으로 LMMSE
 
             H_hat_full(rcv,:) = h_hat.';                                   % 추정값을 행으로 저장
         end
@@ -308,7 +334,7 @@ for rr = 1:numel(r_list)                                                   % r_l
     save(sprintf('dnn_r_%03d_net.mat', round(1000*r)), 'net', 'muX', 'sX'); % 학습 결과 저장 (파일명: dnn_r_875_net.mat 등)
 end
 
-%% ------------------ Plot results (NMSE vs Eb/N0) ------------------
+%% ------------------ Plot results - 그래프 (NMSE vs Eb/N0) ------------------
 figure('Color',[1 1 1],'Position',[100 100 900 600]);                       % figure 생성 및 크기 설정
 semilogy(EbN0_dBs, results_baseline, 'b-o', 'LineWidth', 1.5, 'MarkerSize', 6); hold on; % baseline (full LMMSE) 플롯
 markers = {'^-','>-','v-'};                                                  % proposed curve 마커 목록
@@ -320,23 +346,23 @@ for r = r_list
     ii = ii + 1;
 end
 
-xlabel('E_b/N_0 [dB]','FontSize',15);                                        % x축 레이블 (영문)
-ylabel('NMSE','FontSize',15);                                                 % y축 레이블 (영문)
-title(sprintf('NMSE vs E_b/N_0 (NT=%d, NR=%d)', NT, NR),'FontSize',15);      % 타이틀 (영문)
+xlabel('E_b/N_0 [dB]','FontSize',20);                                        % x축 레이블 (영문)
+ylabel('NMSE','FontSize',20);                                                 % y축 레이블 (영문)
+title(sprintf('NMSE vs E_b/N_0 (NT=%d, NR=%d)', NT, NR),'FontSize',20);      % 타이틀 (영문)
 grid on; box on;
 
 
 % y 축 라벨 고정 코드
-% ylim([1e-4 1e-1]);                                                          % y축 고정 (아래=1e-4, 위=1e-1)
-% yticks([1e-1 1e-2 1e-3 1e-4]);                                              % (선택) 눈금 고정
-% yticklabels({'10^{-1}','10^{-2}','10^{-3}','10^{-4}'});                   % (선택) 라벨 지정
+ylim([1e-4 1e-1]);                                                          % y축 고정 (아래=1e-4, 위=1e-1)
+yticks([1e-4 1e-3 1e-2 1e-1]);                                              % (선택) 눈금 고정
+yticklabels({'10^{-4}','10^{-3}','10^{-2}', '10^{-1}'});                    % (선택) 라벨 지정
 
 legend_entries = [{'Baseline (Full LMMSE)'}];                                % 범례 초기화
 for k = 1:numel(r_list)
     legend_entries{end+1} = sprintf('Proposed r=%.3f', r_list(k));           % Proposed 라인 이름 추가
 end
 legend(legend_entries, 'Location', 'southwest');                             % 범례 표시
-set(gca, 'FontSize', 15);                                                    % 축 폰트 크기 설정
+set(gca, 'FontSize', 20);                                                    % 축 폰트 크기 설정
 
 
 
