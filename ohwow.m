@@ -4,13 +4,21 @@ clear; close all; clc;
 rng(0,'twister');
 
 %% ---------------- System / Paper params ----------------
-NT   = 64;          % Tx antennas
+NT   = 64;         % Tx antennas
 NR   = 2;           % Rx antennas
-NT_H = 8; NT_V = 8; assert(NT_H*NT_V==NT,'UPA size mismatch');
+NT_H = 8; NT_V = 8;
 
+% 안테나 수가 맞지 않을 때 오류 메시지를 출력함
+% 해당 메시지에서 NT 값에 대해 NT_H 와 NT_V 의 곱이 일치하도록 변수 수정
+assert(NT_H*NT_V==NT,'UPA size mismatch');   
+
+% 인접한 송신(또는 배열) 안테나 간의 공간적 상관 계수
 rho  = 0.9;         % nearest-neighbor corr.
-r_list = [0.875 0.938 0.969];
-Npilot_dict = containers.Map([0.875 0.938 0.969],[56 60 62]);  % |P|
+% r_list = [0.875 0.938 0.969];
+r_list = [0.5 0.75 0.875];
+% Npilot_dict = containers.Map([0.875 0.938 0.969],[56 60 62]);  % |P|
+% Npilot_dict = containers.Map([0.5 0.75 0.9],[64 96 115]);
+Npilot_dict = containers.Map([0.5 0.75 0.875],[32 48 56]);
 
 % Pilot repetition (NL times per pilot group)
 N_L_train = 8; 
@@ -18,7 +26,7 @@ N_L_test  = 8;      % same as paper setting idea
 
 % SNR settings (QPSK)
 EbN0_dBs = 0:5:20; 
-mod_order = 4; bits_per_symbol = 2;
+mod_order = 2; bits_per_symbol = 1;
 EsN0_dBs = EbN0_dBs + 10*log10(bits_per_symbol);
 EbN0_train_dB = 20;
 EsN0_train_dB = EbN0_train_dB + 10*log10(bits_per_symbol);
@@ -32,8 +40,11 @@ valFraction = 0.15;
 R_h = toeplitz(rho.^(0:NT_H-1));
 R_v = toeplitz(rho.^(0:NT_V-1));
 R_t = kron(R_h, R_v); R_t = (R_t+R_t')/2;       % Hermitianize
+
 % stable Hermitian sqrt
-[U,D]=eig(R_t); lam = max(real(diag(D)),0); Rts = U*diag(sqrt(lam))*U';
+[U,D]=eig(R_t);
+lam = max(real(diag(D)),0);
+Rts = U*diag(sqrt(lam))*U';
 
 %% ---------------- Channel generator -------------------
 gen_channel = @(ns) apply_corr(gen_channel_peda(ns, NR, NT), Rts); % H=Hw*Rt^1/2
