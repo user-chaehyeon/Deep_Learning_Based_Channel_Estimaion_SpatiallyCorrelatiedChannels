@@ -150,12 +150,19 @@ for rr=1:numel(r_list)
     % DNN (Residual 회귀)
     layers = [
         featureInputLayer(input_dim,'Normalization','none','Name','in')
+
         fullyConnectedLayer(hidden_units(1),'Name','fc1')
+        layerNormalizationLayer('Name','ln1','Epsilon',1e-5) % 추가
         reluLayer('Name','relu1')
+
         fullyConnectedLayer(hidden_units(2),'Name','fc2')
+        layerNormalizationLayer('Name','ln2','Epsilon',1e-5)  % 추가
         reluLayer('Name','relu2')
+
         fullyConnectedLayer(hidden_units(3),'Name','fc3')
+        layerNormalizationLayer('Name','ln3','Epsilon',1e-5)  % 추가
         reluLayer('Name','relu3')
+
         fullyConnectedLayer(output_dim,'Name','out')
         regressionLayer('Name','mse')   % per-sample scale 덕에 MSE로도 NMSE에 근접
     ];
@@ -290,8 +297,8 @@ function [P_idx, N_idx] = make_uniform_pilots(NH, NV, Npilot)
         P_idx = sort(P(pick));
     else
         need = Npilot - numel(P);
-        pool = setdiff(1:(NH*NV), P);
+        pool = setdiff(1:(NT), P);
         P_idx = sort([P, pool(round(linspace(1,numel(pool),need)))]);
     end
-    N_idx = setdiff(1:(NH*NV), P_idx);
+    N_idx = setdiff(1:(NT), P_idx);
 end
