@@ -24,12 +24,20 @@ Npilot_dict = containers.Map([0.5 0.75 0.875],[32 48 56]);
 N_L_train = 8; 
 N_L_test  = 8;      % same as paper setting idea
 
-% SNR settings (QPSK)
-EbN0_dBs = 0:5:20; 
-mod_order = 2; bits_per_symbol = 1;
-EsN0_dBs = EbN0_dBs + 10*log10(bits_per_symbol);
+% SNR settings (QPSK -> M=4, log(M)=2)
+% EbN0_dBs = 0:5:20; 
+% mod_order = 4;
+bits_per_symbol = 2;
+
+mod_order = 2;                 % QPSK
+k = log2(mod_order);           % = 2
+EbN0_dBs = 0:5:20;
+EsN0_dBs = EbN0_dBs + 10*log10(k);
+
+% EsN0_dBs = EbN0_dBs + 10*log10(bits_per_symbol);
 EbN0_train_dB = 20;
-EsN0_train_dB = EbN0_train_dB + 10*log10(bits_per_symbol);
+% EsN0_train_dB = EbN0_train_dB + 10*log10(bits_per_symbol);
+EsN0_train_dB = EbN0_train_dB + 10*log10(k);
 
 % Monte Carlo
 N_train = 2000; 
@@ -59,17 +67,60 @@ lmmse_from_partial = @(yP,P,s2) lmmse_from_partial_fn(yP,P,s2,R_t);
 % Full pilots for all NT, LMMSE, closed-form error covariance Sigma_e
 nmse_lmmse_cf = @(Rt,s2,NL) real(trace(inv(inv(Rt)+(NL/s2)*eye(size(Rt))))/trace(Rt));
 numSNR = numel(EbN0_dBs);
-results_baseline = zeros(numSNR,1);
-for si=1:numSNR
-    Es_lin = 10.^(EsN0_dBs(si)/10);
-    s2 = 1/Es_lin;
-    results_baseline(si) = nmse_lmmse_cf(R_t, s2, N_L_test);
+% results_baseline = zeros(numSNR,1);
+% for si=1:numSNR
+%     Es_lin = 10.^(EsN0_dBs(si)/10);
+%     s2 = 1/Es_lin;
+%     results_baseline(si) = nmse_lmmse_cf(R_t, s2, N_L_test);
+% end
+
+% === Baseline by simulation (full pilots, NL averaging) ===
+results_baseline = zeros(numel(EbN0_dBs),1);
+
+% for si = 1:numel(EbN0_dBs)
+%     EsN0_lin   = 10^(EsN0_dBs(si)/10);   % <-- EbN0가 아니라 EsN0 사용
+% 
+% 
+% % for si = 1:numel(EbN0_dBs)
+% %     EbN0_lin   = 10^(EbN0_dBs(si)/10);
+% %     EsN0_lin   = bits_per_symbol * EbN0_lin;      % ★
+%     sigma2     = 1/EsN0_lin;
+%     sigma2_eff = sigma2 / N_L_test;               % ★
+
+
+for si = 1:numel(EbN0_dBs)
+    EsN0_lin = 10^(EsN0_dBs(si)/10); % 여기서는 k를 다시 곱하지 않음
+    sigma2   = 1/EsN0_lin;
+    sigma2_eff = sigma2 / N_L_test;
+
+
+    tot = 0;
+    for t = 1:N_test
+        H = gen_channel(1); H = squeeze(H);       % (NR x NT)
+
+        H_est = zeros(NR,NT);
+        for rcv = 1:NR
+            y = zeros(1,NT);
+            for l = 1:N_L_test
+                noise = (randn(1,NT)+1i*randn(1,NT)) * sqrt(sigma2/2);
+                y = y + (H(rcv,:) + noise);       % 파일럿 심볼은 1로 가정
+            end
+            y = y / N_L_test;
+            h_hat = R_t * ((R_t + sigma2_eff*eye(NT)) \ y.'); % LMMSE
+            H_est(rcv,:) = h_hat.';
+        end
+
+        e   = norm(H - H_est,'fro')^2;
+        pwr = norm(H,'fro')^2;
+        tot = tot + e/(pwr + 1e-12);
+    end
+    results_baseline(si) = tot / N_test;
 end
 
 %% ---------------- DNN hyperparams ---------------------
 hidden_units  = [1024 1024 1024];  % paper-scale width
 learning_rate = 1e-5;              % slightly larger for faster convergence
-maxEpochs     = 30;               % paper-like long training
+maxEpochs     = 50;               % paper-like long training
 miniBatchSize = 32;
 
 %% ---------------- Main loop over r --------------------
@@ -86,7 +137,12 @@ for rr=1:numel(r_list)
     fprintf('\n=== r=%.3f | Npilot=%d ===\n',r,Npilot);
 
     %% --------- Build TRAIN set: input = Hhat_pilot(LMMSE@P), target = Hhat_null(LMMSE@N) ---------
-    Es_lin_train = 10.^(EsN0_train_dB/10);  s2_train = 1/Es_lin_train;
+    % Es_lin_train = 10.^(EsN0_train_dB/10); 
+    % s2_train = 1/Es_lin_train;
+
+    EbN0_train_dB = 20;
+    EsN0_train_dB = EbN0_train_dB + 10*log10(k);
+    s2_train = 1/10^(EsN0_train_dB/10);
 
     X_all = zeros(N_train, input_dim,  'single');
     Y_all = zeros(N_train, output_dim, 'single');
@@ -154,13 +210,25 @@ for rr=1:numel(r_list)
 
     %% --------- TEST sweep over SNR: predict H_null and assemble H_bar ---------
     NMSE_dnn = zeros(numSNR,1);
+    % for si=1:numSNR
+    %     % SNR 설정 -> 잡음 분산 계산
+    %     Es_lin = 10^(EsN0_dBs(si)/10); s2 = 1/Es_lin;
     for si=1:numSNR
-        Es_lin = 10^(EsN0_dBs(si)/10); s2 = 1/Es_lin;
+        Es_lin_train = 10^(EsN0_train_dB/10);  s2_train = 1/Es_lin_train;
+        Es_lin = 10^(EsN0_dBs(si)/10);  % <-- EsN0
+        s2 = 1/Es_lin;
+
+
         acc = 0;
         for t=1:N_test
+        % 몬테카를로 반복(N_test) - 매 반복에서 "진짜 채널" H를 생성
             H = gen_channel(1); H = squeeze(H);   % (NR x NT)
 
             % partial pilots → LMMSE(full) with NL averaging
+            % 부분 파일럿 관측 -> LMMSE로 Full 길이 벡터 복원
+            % 각 수신 안테나마다 파일럿 위치만 관측(파일럿 심볼은 1 가정)
+            % N_L_test 번 평균한 뒤 psrtial -> full LMMSE 적용
+
             H_full_fromP = zeros(NR,NT);
             for rx=1:NR
                 yP = zeros(1,length(P_idx));
@@ -172,8 +240,11 @@ for rr=1:numel(r_list)
                 h_hat = lmmse_from_partial(yP.', P_idx, s2/N_L_test);
                 H_full_fromP(rx,:) = h_hat.';
             end
+            % 결과적으로 H_full_fromP 는 전체 송신 안테나 방향의 LMMSE 추정값 (pilot&null 모두)
 
             % DNN 입력 만들기 → 예측
+            % DNN은 파일럿 위치의 LMMSE 추정값만느올 입력을 받고 Null 위치의 채널을 직접 예측
+            % 실수부-허수부 분리-결합
             Xin  = H_full_fromP(:,P_idx);
             xin  = [real(Xin(:)); imag(Xin(:))]';
             xinN = single((xin - muX)./sX);
@@ -185,11 +256,15 @@ for rr=1:numel(r_list)
             Hnull_hat = reshape(yR+1i*yI, NR, numel(N_idx));
 
             % 최종 조립: P는 LMMSE, N은 DNN
+            % 파일럿 구간은 LMMSE 구간을 사용(H_full_fromP(:,P_idx))
+            % Null 구간은 DNN 예측 값 (Hnull_hat) 사용
             H_bar = zeros(NR,NT);
             H_bar(:,P_idx) = H_full_fromP(:,P_idx);
             H_bar(:,N_idx) = Hnull_hat;
 
             % NMSE
+            % 각 SNR마다 평균 NMSE를 얻고, results_dnn_map(r)에 저장.
+            % 마지막에 네트워크와 정규화 통계, 인덱스들을 .mat로 저장.
             acc = acc + norm(H - H_bar,'fro')^2/(norm(H,'fro')^2 + 1e-12);
         end
         NMSE_dnn(si) = acc / N_test;
